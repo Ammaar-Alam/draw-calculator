@@ -1,0 +1,16 @@
+{
+  "userName": "Ammaar Hameed",
+  "puid": "920374445",
+  "drawTime": "4/15/25 2:34 PM",
+  "rawPosition": 1252,
+  "initialAhead": 1251,
+  "removedSpelman": 166,
+  "spelmanCapacity": 208,
+  "removedOtherRes": 0,
+  "otherResTopN": 50,
+  "totalRemoved": 166,
+  "finalPositionEstimate": 1085,
+  "availableSingles": 490,
+  "probabilitySingle": 45,
+  "lastUpdated": "2025-03-29 10:57:10"
+}

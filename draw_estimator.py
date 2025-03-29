@@ -1,7 +1,8 @@
 import csv
 from datetime import datetime
 import os
-import json # Import the json library
+import json
+import glob
 
 # --- Configuration ---
 # Assuming the python script is in the PARENT directory of 'room-draw-analysis'
@@ -10,11 +11,12 @@ REACT_APP_DIR = os.path.join(BASE_DIR, 'room-draw-analysis')
 PUBLIC_DIR = os.path.join(REACT_APP_DIR, 'public')
 OUTPUT_JSON_PATH = os.path.join(PUBLIC_DIR, 'dashboard-data.json') # Output path
 
-# Input file paths (relative to the script's location)
-UPPERCLASS_FILENAME = 'UpperclassTimeOrder2025 (1).csv'
-AVAILABLE_ROOMS_FILENAME = 'AvailableRoomsList2025.csv'
-SPELMAN_DRAW_FILENAME = 'SpelmanTimeOrder2025.csv'
-NCW_DRAW_FILENAME = 'NCWTimeOrder2025 (1).csv' # Add NCW filename explicitly if needed for input prompt example
+# Required file patterns
+REQUIRED_FILES = {
+    'upperclass': 'UpperclassTimeOrder*.csv',
+    'rooms': 'AvailableRoomsList*.csv',
+    'spelman': 'SpelmanTimeOrder*.csv'
+}
 
 RES_COLLEGE_TOP_N = 50
 
@@ -29,7 +31,15 @@ ROOM_TYPE_MAP = {
     # Add other types if they exist
 }
 
-# --- Helper Functions ---
+def find_csv_file(pattern):
+    """Find the first CSV file matching the given pattern."""
+    files = glob.glob(os.path.join(BASE_DIR, pattern))
+    if not files:
+        print(f"Warning: No file found matching pattern: {pattern}")
+        return None
+    if len(files) > 1:
+        print(f"Warning: Multiple files found matching pattern {pattern}. Using: {files[0]}")
+    return os.path.basename(files[0])
 
 def load_draw_data(filepath):
     """Loads data from a draw time CSV file (Upperclass or Res College)."""
@@ -129,7 +139,6 @@ def calculate_room_stats(rooms_data):
     print(f"Found {count_upperclass_singles} SINGLE rooms listed in Upperclass housing.")
     return spelman_capacity, total_upperclass_singles
 
-
 def get_top_spelman_drawers(spelman_data, capacity):
     """Gets PUIDs of the top 'capacity' number of drawers from the Spelman-specific list."""
     puids = set()
@@ -167,25 +176,27 @@ def find_user_position(data, first_name, last_name):
 def get_residential_college_early_drawers(top_n, exclude_file=None):
     """Gets PUIDs of top N drawers from multiple residential college files, excluding one."""
     early_drawer_puids = set()
-    print(f"\nEnter paths to OTHER Residential College CSV files (e.g., {NCW_DRAW_FILENAME}).")
-    print(f"(Will automatically exclude {exclude_file} if entered)")
-    print("Press Enter without typing a path when you are done adding files.")
+    
+    # Find all CSV files that might be residential college files
+    all_csv_files = glob.glob(os.path.join(BASE_DIR, '*.csv'))
+    res_college_files = [f for f in all_csv_files if 'TimeOrder' in f and 'Upperclass' not in f and 'Spelman' not in f]
+    
+    if not res_college_files:
+        print("Warning: No residential college CSV files found.")
+        return early_drawer_puids
+    
+    print(f"\nFound {len(res_college_files)} residential college CSV files:")
+    for file in res_college_files:
+        print(f"- {os.path.basename(file)}")
+    
+    if exclude_file:
+        absolute_exclude_path = os.path.normpath(os.path.join(BASE_DIR, exclude_file))
+        res_college_files = [f for f in res_college_files if f != absolute_exclude_path]
+        print(f"\nExcluding {exclude_file} from processing.")
 
-    absolute_exclude_path = os.path.normpath(os.path.join(BASE_DIR, exclude_file)) if exclude_file else None
-
-    while True:
-        filepath_input = input("Path to OTHER Residential College CSV (or press Enter to finish): ").strip()
-        if not filepath_input:
-            break
-
-        absolute_filepath = os.path.normpath(os.path.join(BASE_DIR, filepath_input))
-
-        if absolute_exclude_path and absolute_filepath == absolute_exclude_path:
-            print(f"Skipping {filepath_input} as it's the designated Spelman file.")
-            continue
-
-        print(f"Processing {filepath_input}...")
-        college_data = load_draw_data(filepath_input) # Pass relative path
+    for filepath in res_college_files:
+        print(f"\nProcessing {os.path.basename(filepath)}...")
+        college_data = load_draw_data(os.path.basename(filepath))
 
         if college_data:
             count = 0
@@ -196,12 +207,12 @@ def get_residential_college_early_drawers(top_n, exclude_file=None):
                         early_drawer_puids.add(puid)
                         count += 1
                     else:
-                         print(f"Warning: Row in {filepath_input} missing PUID: {person}. Skipping for early drawer check.")
+                        print(f"Warning: Row in {os.path.basename(filepath)} missing PUID: {person}. Skipping for early drawer check.")
                 else:
                     break
-            print(f"Added PUIDs for the top {count} drawers from {filepath_input}.")
+            print(f"Added PUIDs for the top {count} drawers from {os.path.basename(filepath)}.")
         else:
-            print(f"Skipping file {filepath_input} due to loading errors.")
+            print(f"Skipping file {os.path.basename(filepath)} due to loading errors.")
 
     return early_drawer_puids
 
@@ -213,22 +224,38 @@ def calculate_probability(available, position):
     # Linear probability estimate
     return max(0, round((available / position) * 100))
 
-
 # --- Main Program Logic ---
 
 print("--- Upperclassmen Housing Draw Estimator & Dashboard Updater ---")
 
-# 1. Load Data
-print(f"\nLoading upperclassmen data from {UPPERCLASS_FILENAME}...")
-upperclass_data = load_draw_data(UPPERCLASS_FILENAME)
+# 1. Find required files
+print("\nSearching for required CSV files...")
+upperclass_file = find_csv_file(REQUIRED_FILES['upperclass'])
+rooms_file = find_csv_file(REQUIRED_FILES['rooms'])
+spelman_file = find_csv_file(REQUIRED_FILES['spelman'])
+
+if not all([upperclass_file, rooms_file, spelman_file]):
+    print("\nError: Could not find all required files. Please ensure the following files exist:")
+    for key, pattern in REQUIRED_FILES.items():
+        print(f"- {pattern}")
+    exit(1)
+
+print("\nFound all required files:")
+print(f"- Upperclass: {upperclass_file}")
+print(f"- Rooms: {rooms_file}")
+print(f"- Spelman: {spelman_file}")
+
+# 2. Load Data
+print(f"\nLoading upperclassmen data from {upperclass_file}...")
+upperclass_data = load_draw_data(upperclass_file)
 if not upperclass_data: exit("Critical Error: Could not load upperclassmen data.")
 
-print(f"\nLoading available rooms data from {AVAILABLE_ROOMS_FILENAME}...")
-rooms_data = load_rooms_data(AVAILABLE_ROOMS_FILENAME)
+print(f"\nLoading available rooms data from {rooms_file}...")
+rooms_data = load_rooms_data(rooms_file)
 # Don't exit if rooms fail, just disable features
 
-print(f"\nLoading Spelman draw times from {SPELMAN_DRAW_FILENAME}...")
-spelman_data = load_draw_data(SPELMAN_DRAW_FILENAME)
+print(f"\nLoading Spelman draw times from {spelman_file}...")
+spelman_data = load_draw_data(spelman_file)
 # Don't exit if Spelman fails, just disable features
 
 print("\nCalculating Room Stats...")
@@ -236,19 +263,18 @@ spelman_capacity, available_singles = calculate_room_stats(rooms_data)
 print(f"Calculated Spelman Capacity (Y): {spelman_capacity}")
 print(f"Calculated Available Upperclass Singles: {available_singles}")
 
-
 print("\nIdentifying top Spelman drawers...")
 top_spelman_puids = get_top_spelman_drawers(spelman_data, spelman_capacity)
 
-# 2. Get User Input
+# 3. Get User Input
 user_first_name = input("\nEnter your First Name: ").strip()
 user_last_name = input("Enter your Last Name: ").strip()
 
-# 3. Find User
+# 4. Find User
 user_info, user_index = find_user_position(upperclass_data, user_first_name, user_last_name)
 
 if user_index == -1:
-    exit(f"\nUser '{user_first_name} {user_last_name}' not found in {UPPERCLASS_FILENAME}.")
+    exit(f"\nUser '{user_first_name} {user_last_name}' not found in {upperclass_file}.")
 
 # Extract user details safely
 user_puid = user_info.get('PUID', 'N/A')
@@ -259,7 +285,7 @@ print(f"\nFound user: {user_full_name}")
 print(f"  Draw Time: {user_draw_time_str}")
 print(f"  Position in Upperclassmen Draw: {user_index + 1} out of {len(upperclass_data)}")
 
-# 4. Initial Analysis
+# 5. Initial Analysis
 people_ahead_initial = upperclass_data[:user_index]
 initial_count = len(people_ahead_initial)
 print(f"\nInitially, there are {initial_count} people scheduled to draw before you.")
@@ -272,12 +298,12 @@ if initial_count == 0:
     removed_res_college_count = 0
     total_removed = 0
 else:
-    # 5. Get Other Res College Drawers
+    # 6. Get Other Res College Drawers
     print(f"\nIdentifying students likely to take spots in OTHER Residential Colleges (Top {RES_COLLEGE_TOP_N}).")
-    early_res_college_puids = get_residential_college_early_drawers(RES_COLLEGE_TOP_N, exclude_file=SPELMAN_DRAW_FILENAME)
+    early_res_college_puids = get_residential_college_early_drawers(RES_COLLEGE_TOP_N, exclude_file=spelman_file)
     print(f"\nIdentified {len(early_res_college_puids)} unique PUIDs from the top {RES_COLLEGE_TOP_N} of other colleges.")
 
-    # 6. Filter List
+    # 7. Filter List
     people_ahead_filtered = []
     removed_res_college_count = 0
     removed_spelman_count = 0
@@ -311,7 +337,7 @@ else:
     final_count = len(people_ahead_filtered)
     total_removed = removed_spelman_count + removed_res_college_count
 
-# 7. Calculate Final Stats & Probability
+# 8. Calculate Final Stats & Probability
 print("\n--- Final Estimate ---")
 print(f"Initial number ahead: {initial_count}")
 print(f"  - Removed (Spelman Top {spelman_capacity}): {removed_spelman_count}")
@@ -323,7 +349,7 @@ probability_single = calculate_probability(available_singles, final_count)
 print(f"\nAvailable Upperclass Singles: {available_singles}")
 print(f"Estimated Probability of getting a Single: {probability_single}%")
 
-# 8. Prepare Data for JSON Output
+# 9. Prepare Data for JSON Output
 output_data = {
     "userName": user_full_name,
     "puid": user_puid,
@@ -341,7 +367,7 @@ output_data = {
     "lastUpdated": datetime.now().strftime("%Y-%m-%d %H:%M:%S") # Add timestamp
 }
 
-# 9. Write JSON file
+# 10. Write JSON file
 try:
     # Ensure the public directory exists
     os.makedirs(PUBLIC_DIR, exist_ok=True)
