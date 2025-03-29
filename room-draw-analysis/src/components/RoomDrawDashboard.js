@@ -1,7 +1,6 @@
 // File: /room-draw-analysis/src/components/RoomDrawDashboard.js
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042']; // Keep for potential future use
 
 // --- Default data structure (used while loading or if fetch fails) ---
 const defaultData = {
@@ -90,7 +89,6 @@ const RoomDrawDashboard = () => {
     { name: 'Chance of Not Getting a Single', value: 100 - probabilitySingle },
   ];
 
-  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042']; // Keep for potential future use
   const PIE_COLORS = ['#00C49F', '#FF8042']; // Green for success, Red/Orange for failure
 
   // --- Render component ---
