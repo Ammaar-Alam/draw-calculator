@@ -6,11 +6,12 @@
   "initialAhead": 1251,
   "removedSpelman": 166,
   "spelmanCapacity": 208,
-  "removedOtherRes": 0,
+  "removedOtherRes": 237,
   "otherResTopN": 50,
-  "totalRemoved": 166,
-  "finalPositionEstimate": 1085,
+  "totalRemoved": 403,
+  "finalPositionEstimate": 848,
+  "userRankAmongCompetitors": 849,
   "availableSingles": 490,
-  "probabilitySingle": 45,
-  "lastUpdated": "2025-03-29 10:57:10"
+  "probabilitySingle": 58,
+  "lastUpdated": "2025-03-29 11:03:13"
 }

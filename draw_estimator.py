@@ -2,7 +2,7 @@ import csv
 from datetime import datetime
 import os
 import json
-import glob
+import glob # Keep glob for finding required files
 
 # --- Configuration ---
 # Assuming the python script is in the PARENT directory of 'room-draw-analysis'
@@ -11,12 +11,15 @@ REACT_APP_DIR = os.path.join(BASE_DIR, 'room-draw-analysis')
 PUBLIC_DIR = os.path.join(REACT_APP_DIR, 'public')
 OUTPUT_JSON_PATH = os.path.join(PUBLIC_DIR, 'dashboard-data.json') # Output path
 
-# Required file patterns
+# Required file patterns (for finding the main files)
 REQUIRED_FILES = {
     'upperclass': 'UpperclassTimeOrder*.csv',
     'rooms': 'AvailableRoomsList*.csv',
     'spelman': 'SpelmanTimeOrder*.csv'
 }
+# Example of another potential Res College file pattern (used in prompt)
+NCW_PATTERN_EXAMPLE = 'NCW*.csv'
+
 
 RES_COLLEGE_TOP_N = 50
 
@@ -28,23 +31,29 @@ ROOM_TYPE_MAP = {
     'QUAD': 4,
     'QUINT': 5,
     '6PERSON': 6
-    # Add other types if they exist
 }
 
 def find_csv_file(pattern):
-    """Find the first CSV file matching the given pattern."""
-    files = glob.glob(os.path.join(BASE_DIR, pattern))
+    """Find the first CSV file matching the given pattern in BASE_DIR."""
+    # Search relative to the script's directory (BASE_DIR)
+    search_pattern = os.path.join(BASE_DIR, pattern)
+    files = glob.glob(search_pattern)
     if not files:
-        print(f"Warning: No file found matching pattern: {pattern}")
+        print(f"Error: No file found matching pattern: {pattern} in {BASE_DIR}")
         return None
+    # Return only the basename for consistency, load_data will prepend BASE_DIR
+    relative_path = os.path.relpath(files[0], BASE_DIR)
     if len(files) > 1:
-        print(f"Warning: Multiple files found matching pattern {pattern}. Using: {files[0]}")
-    return os.path.basename(files[0])
+        print(f"Warning: Multiple files found matching pattern '{pattern}'. Using: {relative_path}")
+    return relative_path # Return relative path
 
-def load_draw_data(filepath):
-    """Loads data from a draw time CSV file (Upperclass or Res College)."""
+# --- Helper Functions (load_draw_data, load_rooms_data, etc. remain mostly the same) ---
+def load_draw_data(filepath_relative):
+    """Loads data from a draw time CSV file (Upperclass or Res College).
+       Expects filepath_relative to be relative to BASE_DIR.
+    """
     data = []
-    absolute_filepath = os.path.join(BASE_DIR, filepath) # Use absolute path
+    absolute_filepath = os.path.join(BASE_DIR, filepath_relative)
     if not os.path.exists(absolute_filepath):
         print(f"Error: File not found at {absolute_filepath}")
         return None
@@ -52,35 +61,35 @@ def load_draw_data(filepath):
         with open(absolute_filepath, mode='r', encoding='utf-8-sig') as infile:
             reader = csv.DictReader(infile)
             required_cols = ['PUID', 'Draw Time', 'Last Name', 'First Name']
-            # Use list comprehension for cleaner check
             missing = [col for col in required_cols if col not in (reader.fieldnames or [])]
             if missing:
-                print(f"Error: File {filepath} is missing required columns: {missing}. Check CSV header.")
+                print(f"Error: File {filepath_relative} is missing required columns: {missing}. Check CSV header.")
                 return None
 
             for i, row in enumerate(reader):
                 try:
-                    # Standardize keys (optional but good practice)
                     row = {k.strip(): v.strip() for k, v in row.items()}
                     row['Draw Time Obj'] = datetime.strptime(row['Draw Time'], '%m/%d/%y %I:%M %p')
                     row['Original Row'] = i
                     data.append(row)
                 except ValueError as e:
-                    print(f"Warning: Could not parse date in row: {row} from {filepath}. Error: {e}. Skipping row.")
+                    print(f"Warning: Could not parse date in row: {row} from {filepath_relative}. Error: {e}. Skipping row.")
                 except KeyError as e:
-                    print(f"Warning: Missing expected column '{e}' in file {filepath}. Skipping row {row}")
+                    print(f"Warning: Missing expected column '{e}' in file {filepath_relative}. Skipping row {row}")
                     continue
     except Exception as e:
-        print(f"Error reading file {filepath}: {e}")
+        print(f"Error reading file {filepath_relative}: {e}")
         return None
 
     data.sort(key=lambda x: (x.get('Draw Time Obj', datetime.max), x.get('Original Row', float('inf'))))
     return data
 
-def load_rooms_data(filepath):
-    """Loads data from the available rooms CSV file."""
+def load_rooms_data(filepath_relative):
+    """Loads data from the available rooms CSV file.
+       Expects filepath_relative to be relative to BASE_DIR.
+    """
     data = []
-    absolute_filepath = os.path.join(BASE_DIR, filepath) # Use absolute path
+    absolute_filepath = os.path.join(BASE_DIR, filepath_relative)
     if not os.path.exists(absolute_filepath):
         print(f"Error: File not found at {absolute_filepath}")
         return None
@@ -90,14 +99,13 @@ def load_rooms_data(filepath):
             required_cols = ['College', 'Dorm', 'Room', 'Type']
             missing = [col for col in required_cols if col not in (reader.fieldnames or [])]
             if missing:
-                print(f"Error: File {filepath} is missing required columns: {missing}. Check CSV header.")
+                print(f"Error: File {filepath_relative} is missing required columns: {missing}. Check CSV header.")
                 return None
             for row in reader:
-                 # Standardize keys
                 row = {k.strip(): v.strip() for k, v in row.items()}
                 data.append(row)
     except Exception as e:
-        print(f"Error reading file {filepath}: {e}")
+        print(f"Error reading file {filepath_relative}: {e}")
         return None
     return data
 
@@ -105,11 +113,9 @@ def calculate_room_stats(rooms_data):
     """Calculates total available spots and single spots in Upperclass housing."""
     spelman_capacity = 0
     total_upperclass_singles = 0
-    # total_upperclass_spots = 0 # Could calculate this too if needed
-
     if not rooms_data:
         print("Warning: Cannot calculate room stats because room data failed to load.")
-        return 0, 0 # spelman_capacity, total_upperclass_singles
+        return 0, 0
 
     count_spelman_rooms = 0
     count_upperclass_singles = 0
@@ -121,19 +127,14 @@ def calculate_room_stats(rooms_data):
         spots = ROOM_TYPE_MAP.get(room_type, 0)
 
         if college == 'upperclass':
-            # Calculate Spelman Capacity
             if dorm == 'spelman':
                 count_spelman_rooms += 1
                 if spots == 0 and room_type:
                     print(f"Warning: Unknown room type '{room.get('Type')}' for Spelman room {room.get('Room')}. Assuming 0 capacity.")
                 spelman_capacity += spots
-
-            # Count Upperclass Singles
             if room_type == 'SINGLE':
                 total_upperclass_singles += 1
                 count_upperclass_singles += 1
-            # Could add total spots calculation here if needed
-            # total_upperclass_spots += spots
 
     print(f"Found {count_spelman_rooms} rooms listed in Upperclass Spelman.")
     print(f"Found {count_upperclass_singles} SINGLE rooms listed in Upperclass housing.")
@@ -173,30 +174,33 @@ def find_user_position(data, first_name, last_name):
             return person, index
     return None, -1
 
+# *** REVERTED THIS FUNCTION TO MANUAL INPUT ***
 def get_residential_college_early_drawers(top_n, exclude_file=None):
     """Gets PUIDs of top N drawers from multiple residential college files, excluding one."""
     early_drawer_puids = set()
-    
-    # Find all CSV files that might be residential college files
-    all_csv_files = glob.glob(os.path.join(BASE_DIR, '*.csv'))
-    res_college_files = [f for f in all_csv_files if 'TimeOrder' in f and 'Upperclass' not in f and 'Spelman' not in f]
-    
-    if not res_college_files:
-        print("Warning: No residential college CSV files found.")
-        return early_drawer_puids
-    
-    print(f"\nFound {len(res_college_files)} residential college CSV files:")
-    for file in res_college_files:
-        print(f"- {os.path.basename(file)}")
-    
-    if exclude_file:
-        absolute_exclude_path = os.path.normpath(os.path.join(BASE_DIR, exclude_file))
-        res_college_files = [f for f in res_college_files if f != absolute_exclude_path]
-        print(f"\nExcluding {exclude_file} from processing.")
+    ncw_example_file = find_csv_file(NCW_PATTERN_EXAMPLE) or "NCWTimeOrder....csv"
 
-    for filepath in res_college_files:
-        print(f"\nProcessing {os.path.basename(filepath)}...")
-        college_data = load_draw_data(os.path.basename(filepath))
+    print(f"\nEnter relative paths (from script location) to OTHER Residential College CSV files (e.g., {ncw_example_file}).")
+    if exclude_file:
+        print(f"(Excluding {exclude_file})")
+    print("Press Enter without typing a path when you are done adding files.")
+
+    while True:
+        filepath_relative = input("Path to OTHER Residential College CSV (or press Enter to finish): ").strip()
+        if not filepath_relative:
+            break
+
+        # Normalize paths for comparison (optional but good practice)
+        normalized_filepath = os.path.normpath(filepath_relative)
+        normalized_exclude_file = os.path.normpath(exclude_file) if exclude_file else None
+
+        if normalized_exclude_file and normalized_filepath == normalized_exclude_file:
+            print(f"Skipping {filepath_relative} as it's the designated Spelman file.")
+            continue
+
+        print(f"Processing {filepath_relative}...")
+        # Pass the relative path directly to load_draw_data
+        college_data = load_draw_data(filepath_relative)
 
         if college_data:
             count = 0
@@ -207,22 +211,53 @@ def get_residential_college_early_drawers(top_n, exclude_file=None):
                         early_drawer_puids.add(puid)
                         count += 1
                     else:
-                        print(f"Warning: Row in {os.path.basename(filepath)} missing PUID: {person}. Skipping for early drawer check.")
+                         print(f"Warning: Row in {filepath_relative} missing PUID: {person}. Skipping for early drawer check.")
                 else:
-                    break
-            print(f"Added PUIDs for the top {count} drawers from {os.path.basename(filepath)}.")
+                    break # Stop after processing top_n
+            print(f"Added PUIDs for the top {count} drawers from {filepath_relative}.")
         else:
-            print(f"Skipping file {os.path.basename(filepath)} due to loading errors.")
+            print(f"Skipping file {filepath_relative} due to loading errors.")
 
     return early_drawer_puids
+# *** END OF REVERTED FUNCTION ***
 
 def calculate_probability(available, position):
     """Calculates the probability (0-100) of getting a spot."""
-    if position <= 0: return 100 # If effective position is 0 or less, 100% chance
-    if available <= 0: return 0   # If no spots available, 0% chance
-    if available >= position: return 100 # More spots than people ahead
-    # Linear probability estimate
-    return max(0, round((available / position) * 100))
+    # Position here is the number of people *ahead* of the user
+    rank_among_competitors = position + 1
+    if position < 0 : # Should not happen, but safety check
+        return 100
+    if available <= 0: return 0
+    # If the number of available singles is >= the user's rank among competitors, it's 100%
+    if available >= rank_among_competitors: return 100
+    # If the user is literally the next person after available spots run out
+    if available == position: return 0 # Technically very low, but round to 0 for simplicity
+    # Simple linear probability based on rank vs available spots
+    # Example: 10 spots, rank 11 (position 10) -> ~0%
+    # Example: 10 spots, rank 20 (position 19) -> ~50% (10/20)? Or 10/19? Let's stick to position
+    # If position (ahead) >= available, prob is roughly available / (position + 1) ??
+    # Let's use the previous logic: available / position (ahead) -> this feels more intuitive
+    # If 10 spots, 10 people ahead (rank 11), prob = 10/10 = 100? No.
+    # If 10 spots, 11 people ahead (rank 12), prob = 10/11 = ~91%? Seems too high.
+    # Let's rethink: Probability is the chance your rank (position+1) is <= available spots.
+    # If spots >= rank -> 100%.
+    # If spots < rank: maybe estimate as spots / rank?
+    # Example: 10 spots, rank 11 -> 10/11 = 91%
+    # Example: 10 spots, rank 20 -> 10/20 = 50%
+    # Example: 10 spots, rank 100 -> 10/100 = 10%
+    # This seems more reasonable than using 'position' (people ahead) in the denominator.
+    probability = (available / rank_among_competitors) * 100
+    return max(0, round(probability))
+
+
+# --- Main Program Logic ---
+# (Keep the rest of the main logic the same as the previous version,
+#  including finding required files, loading data, getting user input,
+#  finding user, initial analysis, calling the *reverted*
+#  get_residential_college_early_drawers, filtering, calculating final stats,
+#  preparing JSON, and writing JSON)
+
+# ... [Rest of the main logic from the previous correct answer] ...
 
 # --- Main Program Logic ---
 
@@ -235,7 +270,7 @@ rooms_file = find_csv_file(REQUIRED_FILES['rooms'])
 spelman_file = find_csv_file(REQUIRED_FILES['spelman'])
 
 if not all([upperclass_file, rooms_file, spelman_file]):
-    print("\nError: Could not find all required files. Please ensure the following files exist:")
+    print("\nError: Could not find all required files. Please ensure the following patterns match files in the script directory:")
     for key, pattern in REQUIRED_FILES.items():
         print(f"- {pattern}")
     exit(1)
@@ -262,6 +297,7 @@ print("\nCalculating Room Stats...")
 spelman_capacity, available_singles = calculate_room_stats(rooms_data)
 print(f"Calculated Spelman Capacity (Y): {spelman_capacity}")
 print(f"Calculated Available Upperclass Singles: {available_singles}")
+
 
 print("\nIdentifying top Spelman drawers...")
 top_spelman_puids = get_top_spelman_drawers(spelman_data, spelman_capacity)
@@ -298,10 +334,10 @@ if initial_count == 0:
     removed_res_college_count = 0
     total_removed = 0
 else:
-    # 6. Get Other Res College Drawers
+    # 6. Get Other Res College Drawers (Using Manual Input Again)
     print(f"\nIdentifying students likely to take spots in OTHER Residential Colleges (Top {RES_COLLEGE_TOP_N}).")
     early_res_college_puids = get_residential_college_early_drawers(RES_COLLEGE_TOP_N, exclude_file=spelman_file)
-    print(f"\nIdentified {len(early_res_college_puids)} unique PUIDs from the top {RES_COLLEGE_TOP_N} of other colleges.")
+    print(f"\nIdentified {len(early_res_college_puids)} unique PUIDs from the top {RES_COLLEGE_TOP_N} of other colleges entered.")
 
     # 7. Filter List
     people_ahead_filtered = []
@@ -320,11 +356,13 @@ else:
             people_ahead_filtered.append(person)
             continue
 
+        # Check Spelman first (more specific filter)
         if puid in top_spelman_puids:
             if puid not in puids_already_removed:
                 removed_spelman_count += 1
                 puids_already_removed.add(puid)
             removed = True
+        # Only check other res colleges if not removed for Spelman
         elif puid in early_res_college_puids:
              if puid not in puids_already_removed:
                  removed_res_college_count += 1
@@ -334,7 +372,7 @@ else:
         if not removed:
             people_ahead_filtered.append(person)
 
-    final_count = len(people_ahead_filtered)
+    final_count = len(people_ahead_filtered) # This is people *ahead*
     total_removed = removed_spelman_count + removed_res_college_count
 
 # 8. Calculate Final Stats & Probability
@@ -345,8 +383,12 @@ print(f"  - Removed (Other Res College Top {RES_COLLEGE_TOP_N}): {removed_res_co
 print(f"Total removed: {total_removed}")
 print(f"Estimated number ACTUALLY drawing before you: {final_count}")
 
-probability_single = calculate_probability(available_singles, final_count)
+# Probability calculation uses the *rank* among competitors (people ahead + 1)
+user_rank_among_competitors = final_count + 1
+probability_single = calculate_probability(available_singles, user_rank_among_competitors) # Pass rank here
+
 print(f"\nAvailable Upperclass Singles: {available_singles}")
+print(f"Your Estimated Rank for a Single: {user_rank_among_competitors}")
 print(f"Estimated Probability of getting a Single: {probability_single}%")
 
 # 9. Prepare Data for JSON Output
@@ -361,7 +403,8 @@ output_data = {
     "removedOtherRes": removed_res_college_count,
     "otherResTopN": RES_COLLEGE_TOP_N,
     "totalRemoved": total_removed,
-    "finalPositionEstimate": final_count, # This is the number of competitors ahead
+    "finalPositionEstimate": final_count, # Number of competitors ahead
+    "userRankAmongCompetitors": user_rank_among_competitors, # Explicitly add rank
     "availableSingles": available_singles,
     "probabilitySingle": probability_single,
     "lastUpdated": datetime.now().strftime("%Y-%m-%d %H:%M:%S") # Add timestamp
