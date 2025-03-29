@@ -1,6 +1,7 @@
 // File: /room-draw-analysis/src/components/RoomDrawDashboard.js
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042']; // Keep for potential future use
 
 // --- Default data structure (used while loading or if fetch fails) ---
 const defaultData = {
