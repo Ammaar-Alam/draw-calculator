@@ -1,107 +1,134 @@
 import csv
 from datetime import datetime
 import os
+import json # Import the json library
 
 # --- Configuration ---
+# Assuming the python script is in the PARENT directory of 'room-draw-analysis'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+REACT_APP_DIR = os.path.join(BASE_DIR, 'room-draw-analysis')
+PUBLIC_DIR = os.path.join(REACT_APP_DIR, 'public')
+OUTPUT_JSON_PATH = os.path.join(PUBLIC_DIR, 'dashboard-data.json') # Output path
+
+# Input file paths (relative to the script's location)
 UPPERCLASS_FILENAME = 'UpperclassTimeOrder2025 (1).csv'
 AVAILABLE_ROOMS_FILENAME = 'AvailableRoomsList2025.csv'
-SPELMAN_DRAW_FILENAME = 'SpelmanTimeOrder2025.csv' # Specific file for Spelman draw times
+SPELMAN_DRAW_FILENAME = 'SpelmanTimeOrder2025.csv'
+NCW_DRAW_FILENAME = 'NCWTimeOrder2025 (1).csv' # Add NCW filename explicitly if needed for input prompt example
 
-RES_COLLEGE_TOP_N = 50 # Number of top drawers in *other* res colleges likely to take a spot there
+RES_COLLEGE_TOP_N = 50
+
+# Define capacity mapping for room types globally
+ROOM_TYPE_MAP = {
+    'SINGLE': 1,
+    'DOUBLE': 2,
+    'TRIPLE': 3,
+    'QUAD': 4,
+    'QUINT': 5,
+    '6PERSON': 6
+    # Add other types if they exist
+}
 
 # --- Helper Functions ---
 
 def load_draw_data(filepath):
     """Loads data from a draw time CSV file (Upperclass or Res College)."""
     data = []
-    if not os.path.exists(filepath):
-        print(f"Error: File not found at {filepath}")
+    absolute_filepath = os.path.join(BASE_DIR, filepath) # Use absolute path
+    if not os.path.exists(absolute_filepath):
+        print(f"Error: File not found at {absolute_filepath}")
         return None
     try:
-        with open(filepath, mode='r', encoding='utf-8-sig') as infile:
+        with open(absolute_filepath, mode='r', encoding='utf-8-sig') as infile:
             reader = csv.DictReader(infile)
             required_cols = ['PUID', 'Draw Time', 'Last Name', 'First Name']
-            if not all(col in reader.fieldnames for col in required_cols):
-                missing = [col for col in required_cols if col not in reader.fieldnames]
+            # Use list comprehension for cleaner check
+            missing = [col for col in required_cols if col not in (reader.fieldnames or [])]
+            if missing:
                 print(f"Error: File {filepath} is missing required columns: {missing}. Check CSV header.")
                 return None
 
             for i, row in enumerate(reader):
                 try:
-                    # Attempt to parse the Draw Time
+                    # Standardize keys (optional but good practice)
+                    row = {k.strip(): v.strip() for k, v in row.items()}
                     row['Draw Time Obj'] = datetime.strptime(row['Draw Time'], '%m/%d/%y %I:%M %p')
-                    # Store original row number for tie-breaking if times are identical
                     row['Original Row'] = i
                     data.append(row)
                 except ValueError as e:
                     print(f"Warning: Could not parse date in row: {row} from {filepath}. Error: {e}. Skipping row.")
                 except KeyError as e:
-                    # This check is less likely now due to the fieldname check above, but keep for safety
-                    print(f"Warning: Missing expected column '{e}' in file {filepath}. Check CSV header. Skipping row {row}")
+                    print(f"Warning: Missing expected column '{e}' in file {filepath}. Skipping row {row}")
                     continue
     except Exception as e:
         print(f"Error reading file {filepath}: {e}")
         return None
 
-    # Sort primarily by Draw Time Object, secondarily by original row number for stable sort
     data.sort(key=lambda x: (x.get('Draw Time Obj', datetime.max), x.get('Original Row', float('inf'))))
     return data
 
 def load_rooms_data(filepath):
     """Loads data from the available rooms CSV file."""
     data = []
-    if not os.path.exists(filepath):
-        print(f"Error: File not found at {filepath}")
+    absolute_filepath = os.path.join(BASE_DIR, filepath) # Use absolute path
+    if not os.path.exists(absolute_filepath):
+        print(f"Error: File not found at {absolute_filepath}")
         return None
     try:
-        with open(filepath, mode='r', encoding='utf-8-sig') as infile:
+        with open(absolute_filepath, mode='r', encoding='utf-8-sig') as infile:
             reader = csv.DictReader(infile)
-            required_cols = ['College', 'Dorm', 'Room', 'Type'] # Sq Foot and Independent are optional for this logic
-            if not all(col in reader.fieldnames for col in required_cols):
-                missing = [col for col in required_cols if col not in reader.fieldnames]
+            required_cols = ['College', 'Dorm', 'Room', 'Type']
+            missing = [col for col in required_cols if col not in (reader.fieldnames or [])]
+            if missing:
                 print(f"Error: File {filepath} is missing required columns: {missing}. Check CSV header.")
                 return None
             for row in reader:
+                 # Standardize keys
+                row = {k.strip(): v.strip() for k, v in row.items()}
                 data.append(row)
     except Exception as e:
         print(f"Error reading file {filepath}: {e}")
         return None
     return data
 
-def calculate_spelman_capacity(rooms_data):
-    """Calculates the total number of student spots available in Spelman."""
-    capacity = 0
-    # Define capacity mapping for room types
-    room_type_map = {
-        'SINGLE': 1,
-        'DOUBLE': 2,
-        'TRIPLE': 3,
-        'QUAD': 4,
-        'QUINT': 5,
-        '6PERSON': 6
-    }
-    count_spelman_rooms = 0
+def calculate_room_stats(rooms_data):
+    """Calculates total available spots and single spots in Upperclass housing."""
+    spelman_capacity = 0
+    total_upperclass_singles = 0
+    # total_upperclass_spots = 0 # Could calculate this too if needed
 
     if not rooms_data:
-        print("Warning: Cannot calculate Spelman capacity because room data failed to load.")
-        return 0
+        print("Warning: Cannot calculate room stats because room data failed to load.")
+        return 0, 0 # spelman_capacity, total_upperclass_singles
+
+    count_spelman_rooms = 0
+    count_upperclass_singles = 0
 
     for room in rooms_data:
-        # Check if the room is in Upperclass Spelman
-        # Case-insensitive matching for robustness
-        college = room.get('College', '').strip().lower()
-        dorm = room.get('Dorm', '').strip().lower()
+        college = room.get('College', '').lower()
+        dorm = room.get('Dorm', '').lower()
+        room_type = room.get('Type', '').upper()
+        spots = ROOM_TYPE_MAP.get(room_type, 0)
 
-        if college == 'upperclass' and dorm == 'spelman':
-            count_spelman_rooms += 1
-            room_type = room.get('Type', '').strip().upper()
-            spots = room_type_map.get(room_type, 0)
-            if spots == 0 and room_type:
-                print(f"Warning: Unknown room type '{room.get('Type')}' for Spelman room {room.get('Room')}. Assuming 0 capacity.")
-            capacity += spots
+        if college == 'upperclass':
+            # Calculate Spelman Capacity
+            if dorm == 'spelman':
+                count_spelman_rooms += 1
+                if spots == 0 and room_type:
+                    print(f"Warning: Unknown room type '{room.get('Type')}' for Spelman room {room.get('Room')}. Assuming 0 capacity.")
+                spelman_capacity += spots
+
+            # Count Upperclass Singles
+            if room_type == 'SINGLE':
+                total_upperclass_singles += 1
+                count_upperclass_singles += 1
+            # Could add total spots calculation here if needed
+            # total_upperclass_spots += spots
 
     print(f"Found {count_spelman_rooms} rooms listed in Upperclass Spelman.")
-    return capacity
+    print(f"Found {count_upperclass_singles} SINGLE rooms listed in Upperclass housing.")
+    return spelman_capacity, total_upperclass_singles
+
 
 def get_top_spelman_drawers(spelman_data, capacity):
     """Gets PUIDs of the top 'capacity' number of drawers from the Spelman-specific list."""
@@ -123,43 +150,42 @@ def get_top_spelman_drawers(spelman_data, capacity):
             else:
                 print(f"Warning: Row in Spelman data missing PUID: {person}. Skipping for top drawer check.")
         else:
-            break # Stop after processing 'capacity' number of drawers
+            break
     print(f"Identified the top {count} PUIDs from the Spelman draw list based on calculated capacity.")
     return puids
-
 
 def find_user_position(data, first_name, last_name):
     """Finds the user's dictionary and index in the data list."""
     first_name_lower = first_name.lower()
     last_name_lower = last_name.lower()
     for index, person in enumerate(data):
-        # Compare case-insensitively and strip whitespace
-        if (person.get('First Name', '').strip().lower() == first_name_lower and
-            person.get('Last Name', '').strip().lower() == last_name_lower):
+        if (person.get('First Name', '').lower() == first_name_lower and
+            person.get('Last Name', '').lower() == last_name_lower):
             return person, index
-    return None, -1 # User not found
+    return None, -1
 
 def get_residential_college_early_drawers(top_n, exclude_file=None):
     """Gets PUIDs of top N drawers from multiple residential college files, excluding one."""
     early_drawer_puids = set()
-    print(f"\nEnter paths to OTHER Residential College CSV files (excluding {exclude_file}).")
+    print(f"\nEnter paths to OTHER Residential College CSV files (e.g., {NCW_DRAW_FILENAME}).")
+    print(f"(Will automatically exclude {exclude_file} if entered)")
     print("Press Enter without typing a path when you are done adding files.")
 
+    absolute_exclude_path = os.path.normpath(os.path.join(BASE_DIR, exclude_file)) if exclude_file else None
+
     while True:
-        filepath = input("Path to OTHER Residential College CSV (or press Enter to finish): ").strip()
-        if not filepath:
+        filepath_input = input("Path to OTHER Residential College CSV (or press Enter to finish): ").strip()
+        if not filepath_input:
             break
 
-        # Normalize paths for comparison (optional but good practice)
-        normalized_filepath = os.path.normpath(filepath)
-        normalized_exclude_file = os.path.normpath(exclude_file) if exclude_file else None
+        absolute_filepath = os.path.normpath(os.path.join(BASE_DIR, filepath_input))
 
-        if normalized_exclude_file and normalized_filepath == normalized_exclude_file:
-            print(f"Skipping {filepath} as it's the designated Spelman file.")
+        if absolute_exclude_path and absolute_filepath == absolute_exclude_path:
+            print(f"Skipping {filepath_input} as it's the designated Spelman file.")
             continue
 
-        print(f"Processing {filepath}...")
-        college_data = load_draw_data(filepath)
+        print(f"Processing {filepath_input}...")
+        college_data = load_draw_data(filepath_input) # Pass relative path
 
         if college_data:
             count = 0
@@ -170,137 +196,159 @@ def get_residential_college_early_drawers(top_n, exclude_file=None):
                         early_drawer_puids.add(puid)
                         count += 1
                     else:
-                         print(f"Warning: Row in {filepath} missing PUID: {person}. Skipping for early drawer check.")
+                         print(f"Warning: Row in {filepath_input} missing PUID: {person}. Skipping for early drawer check.")
                 else:
-                    break # Stop after processing top_n
-            print(f"Added PUIDs for the top {count} drawers from {filepath}.")
+                    break
+            print(f"Added PUIDs for the top {count} drawers from {filepath_input}.")
         else:
-            print(f"Skipping file {filepath} due to loading errors.")
+            print(f"Skipping file {filepath_input} due to loading errors.")
 
     return early_drawer_puids
 
+def calculate_probability(available, position):
+    """Calculates the probability (0-100) of getting a spot."""
+    if position <= 0: return 100 # If effective position is 0 or less, 100% chance
+    if available <= 0: return 0   # If no spots available, 0% chance
+    if available >= position: return 100 # More spots than people ahead
+    # Linear probability estimate
+    return max(0, round((available / position) * 100))
+
+
 # --- Main Program Logic ---
 
-print("--- Upperclassmen Housing Draw Estimator (v2) ---")
+print("--- Upperclassmen Housing Draw Estimator & Dashboard Updater ---")
 
-# 1. Load Upperclassmen Data
+# 1. Load Data
 print(f"\nLoading upperclassmen data from {UPPERCLASS_FILENAME}...")
 upperclass_data = load_draw_data(UPPERCLASS_FILENAME)
-if not upperclass_data:
-    print("Critical Error: Could not load upperclassmen data. Exiting.")
-    exit()
-print(f"Loaded {len(upperclass_data)} entries from upperclassmen list.")
+if not upperclass_data: exit("Critical Error: Could not load upperclassmen data.")
 
-# 2. Load Available Rooms Data
 print(f"\nLoading available rooms data from {AVAILABLE_ROOMS_FILENAME}...")
 rooms_data = load_rooms_data(AVAILABLE_ROOMS_FILENAME)
-if not rooms_data:
-    print("Warning: Could not load available rooms data. Spelman capacity calculation will be skipped.")
-    # Allow continuation, but Spelman filtering won't work
+# Don't exit if rooms fail, just disable features
 
-# 3. Calculate Spelman Capacity
-print("\nCalculating Spelman capacity...")
-spelman_capacity = calculate_spelman_capacity(rooms_data)
-print(f"Calculated capacity (Y) for Spelman Hall: {spelman_capacity} spots")
-
-# 4. Load Spelman Draw Data
 print(f"\nLoading Spelman draw times from {SPELMAN_DRAW_FILENAME}...")
 spelman_data = load_draw_data(SPELMAN_DRAW_FILENAME)
-if not spelman_data:
-    print(f"Warning: Could not load Spelman draw data from {SPELMAN_DRAW_FILENAME}. Spelman-specific filtering will be skipped.")
-    # Allow continuation
+# Don't exit if Spelman fails, just disable features
 
-# 5. Identify Top Spelman Drawers based on Capacity
-print("\nIdentifying top Spelman drawers based on capacity...")
+print("\nCalculating Room Stats...")
+spelman_capacity, available_singles = calculate_room_stats(rooms_data)
+print(f"Calculated Spelman Capacity (Y): {spelman_capacity}")
+print(f"Calculated Available Upperclass Singles: {available_singles}")
+
+
+print("\nIdentifying top Spelman drawers...")
 top_spelman_puids = get_top_spelman_drawers(spelman_data, spelman_capacity)
 
-# 6. Get User Input
+# 2. Get User Input
 user_first_name = input("\nEnter your First Name: ").strip()
 user_last_name = input("Enter your Last Name: ").strip()
 
-# 7. Find User in Upperclassmen List
+# 3. Find User
 user_info, user_index = find_user_position(upperclass_data, user_first_name, user_last_name)
 
 if user_index == -1:
-    print(f"\nUser '{user_first_name} {user_last_name}' not found in the upperclassmen list ({UPPERCLASS_FILENAME}).")
-    exit()
+    exit(f"\nUser '{user_first_name} {user_last_name}' not found in {UPPERCLASS_FILENAME}.")
 
-print(f"\nFound user: {user_info['First Name']} {user_info['Last Name']}")
-print(f"  Draw Time: {user_info['Draw Time']}")
+# Extract user details safely
+user_puid = user_info.get('PUID', 'N/A')
+user_draw_time_str = user_info.get('Draw Time', 'N/A')
+user_full_name = f"{user_info.get('First Name', '')} {user_info.get('Last Name', '')}".strip()
+
+print(f"\nFound user: {user_full_name}")
+print(f"  Draw Time: {user_draw_time_str}")
 print(f"  Position in Upperclassmen Draw: {user_index + 1} out of {len(upperclass_data)}")
 
-# 8. Identify People Ahead of the User (Initially)
+# 4. Initial Analysis
 people_ahead_initial = upperclass_data[:user_index]
 initial_count = len(people_ahead_initial)
-print(f"\nInitially, there are {initial_count} people scheduled to draw before you in the upperclassmen draw.")
+print(f"\nInitially, there are {initial_count} people scheduled to draw before you.")
 
 if initial_count == 0:
-    print("You have the first draw time! No filtering needed.")
-    exit()
+    print("You have the first draw time!")
+    # Still generate JSON for consistency
+    final_count = 0
+    removed_spelman_count = 0
+    removed_res_college_count = 0
+    total_removed = 0
+else:
+    # 5. Get Other Res College Drawers
+    print(f"\nIdentifying students likely to take spots in OTHER Residential Colleges (Top {RES_COLLEGE_TOP_N}).")
+    early_res_college_puids = get_residential_college_early_drawers(RES_COLLEGE_TOP_N, exclude_file=SPELMAN_DRAW_FILENAME)
+    print(f"\nIdentified {len(early_res_college_puids)} unique PUIDs from the top {RES_COLLEGE_TOP_N} of other colleges.")
 
-# 9. Get OTHER Residential College Early Drawers (Top N)
-print(f"\nNow, let's identify students likely to take spots in OTHER Residential Colleges (Top {RES_COLLEGE_TOP_N}).")
-early_res_college_puids = get_residential_college_early_drawers(RES_COLLEGE_TOP_N, exclude_file=SPELMAN_DRAW_FILENAME)
-print(f"\nIdentified {len(early_res_college_puids)} unique PUIDs from the top {RES_COLLEGE_TOP_N} of provided OTHER residential college lists.")
+    # 6. Filter List
+    people_ahead_filtered = []
+    removed_res_college_count = 0
+    removed_spelman_count = 0
+    puids_already_removed = set()
 
-# 10. Filter the "Ahead" List based on BOTH criteria
-people_ahead_filtered = []
-removed_res_college_count = 0
-removed_spelman_count = 0
-puids_already_removed = set() # To avoid double counting if someone is in both sets
+    print("\nFiltering the list of people ahead of you...")
 
-print("\nFiltering the list of people ahead of you based on Res College and Spelman draws...")
+    for person in people_ahead_initial:
+        puid = person.get('PUID')
+        removed = False
 
-for person in people_ahead_initial:
-    puid = person.get('PUID')
-    removed = False
-    reason = ""
+        if not puid:
+            print(f"Warning: Person ahead ({person.get('First Name')} {person.get('Last Name')}) has no PUID. Keeping.")
+            people_ahead_filtered.append(person)
+            continue
 
-    if not puid:
-        print(f"Warning: Person ahead ({person.get('First Name')} {person.get('Last Name')}) has no PUID. Cannot filter, keeping.")
-        people_ahead_filtered.append(person)
-        continue
+        if puid in top_spelman_puids:
+            if puid not in puids_already_removed:
+                removed_spelman_count += 1
+                puids_already_removed.add(puid)
+            removed = True
+        elif puid in early_res_college_puids:
+             if puid not in puids_already_removed:
+                 removed_res_college_count += 1
+                 puids_already_removed.add(puid)
+             removed = True
 
-    # Check Spelman criteria first
-    if puid in top_spelman_puids:
-        if puid not in puids_already_removed:
-            removed_spelman_count += 1
-            puids_already_removed.add(puid)
-        removed = True
-        reason = f"likely taking Spelman spot (Top {spelman_capacity})"
-        # print(f"  - Removing {person.get('First Name')} {person.get('Last Name')} (PUID: {puid}) - {reason}.") # Uncomment for verbose output
+        if not removed:
+            people_ahead_filtered.append(person)
 
-    # Check general res college criteria IF NOT already removed for Spelman
-    elif puid in early_res_college_puids:
-         if puid not in puids_already_removed:
-             removed_res_college_count += 1
-             puids_already_removed.add(puid)
-         removed = True
-         reason = f"likely taking other Res College spot (Top {RES_COLLEGE_TOP_N})"
-         # print(f"  - Removing {person.get('First Name')} {person.get('Last Name')} (PUID: {puid}) - {reason}.") # Uncomment for verbose output
+    final_count = len(people_ahead_filtered)
+    total_removed = removed_spelman_count + removed_res_college_count
 
-    if not removed:
-        people_ahead_filtered.append(person)
-
-final_count = len(people_ahead_filtered)
-total_removed = removed_spelman_count + removed_res_college_count
-
-# 11. Display Final Results
+# 7. Calculate Final Stats & Probability
 print("\n--- Final Estimate ---")
-print(f"User: {user_info['First Name']} {user_info['Last Name']}")
-print(f"Your Upperclassmen Draw Position: {user_index + 1}")
-print(f"\nInitial number of people drawing before you: {initial_count}")
-print(f"  - Removed because likely taking Spelman spot (Top {spelman_capacity}): {removed_spelman_count}")
-print(f"  - Removed because likely taking OTHER Res College spot (Top {RES_COLLEGE_TOP_N}): {removed_res_college_count}")
+print(f"Initial number ahead: {initial_count}")
+print(f"  - Removed (Spelman Top {spelman_capacity}): {removed_spelman_count}")
+print(f"  - Removed (Other Res College Top {RES_COLLEGE_TOP_N}): {removed_res_college_count}")
 print(f"Total removed: {total_removed}")
-print(f"\nEstimated number of people ACTUALLY drawing for Upperclassmen housing before you: {final_count}")
+print(f"Estimated number ACTUALLY drawing before you: {final_count}")
 
-# Optional: Print the names of those still ahead
-# print("\nPeople estimated to draw before you for Upperclassmen Housing:")
-# if final_count > 0:
-#     for i, person in enumerate(people_ahead_filtered):
-#         print(f"  {i+1}. {person.get('First Name')} {person.get('Last Name')} (PUID: {person.get('PUID')}, Time: {person.get('Draw Time')})")
-# else:
-#      print("  (None)")
+probability_single = calculate_probability(available_singles, final_count)
+print(f"\nAvailable Upperclass Singles: {available_singles}")
+print(f"Estimated Probability of getting a Single: {probability_single}%")
 
-print("\nDone.")
+# 8. Prepare Data for JSON Output
+output_data = {
+    "userName": user_full_name,
+    "puid": user_puid,
+    "drawTime": user_draw_time_str,
+    "rawPosition": user_index + 1,
+    "initialAhead": initial_count,
+    "removedSpelman": removed_spelman_count,
+    "spelmanCapacity": spelman_capacity,
+    "removedOtherRes": removed_res_college_count,
+    "otherResTopN": RES_COLLEGE_TOP_N,
+    "totalRemoved": total_removed,
+    "finalPositionEstimate": final_count, # This is the number of competitors ahead
+    "availableSingles": available_singles,
+    "probabilitySingle": probability_single,
+    "lastUpdated": datetime.now().strftime("%Y-%m-%d %H:%M:%S") # Add timestamp
+}
+
+# 9. Write JSON file
+try:
+    # Ensure the public directory exists
+    os.makedirs(PUBLIC_DIR, exist_ok=True)
+    with open(OUTPUT_JSON_PATH, 'w') as outfile:
+        json.dump(output_data, outfile, indent=2) # Use indent for readability
+    print(f"\nSuccessfully updated dashboard data at: {OUTPUT_JSON_PATH}")
+except Exception as e:
+    print(f"\nError writing dashboard data file: {e}")
+
+print("\nPython script finished.")
