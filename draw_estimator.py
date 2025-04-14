@@ -96,7 +96,7 @@ def load_rooms_data(filepath_relative):
     try:
         with open(absolute_filepath, mode='r', encoding='utf-8-sig') as infile:
             reader = csv.DictReader(infile)
-            required_cols = ['College', 'Dorm', 'Room', 'Type']
+            required_cols = ['College', 'Building', 'Room', 'Room Type']
             missing = [col for col in required_cols if col not in (reader.fieldnames or [])]
             if missing:
                 print(f"Error: File {filepath_relative} is missing required columns: {missing}. Check CSV header.")
@@ -122,15 +122,16 @@ def calculate_room_stats(rooms_data):
 
     for room in rooms_data:
         college = room.get('College', '').lower()
-        dorm = room.get('Dorm', '').lower()
-        room_type = room.get('Type', '').upper()
+        building = room.get('Building', '').lower()
+        room_type_raw = room.get('Room Type', '')
+        room_type = room_type_raw.upper()
         spots = ROOM_TYPE_MAP.get(room_type, 0)
 
         if college == 'upperclass':
-            if dorm == 'spelman':
+            if building == 'spelman':
                 count_spelman_rooms += 1
                 if spots == 0 and room_type:
-                    print(f"Warning: Unknown room type '{room.get('Type')}' for Spelman room {room.get('Room')}. Assuming 0 capacity.")
+                    print(f"Warning: Unknown room type '{room_type_raw}' for Spelman room {room.get('Room')}. Assuming 0 capacity.")
                 spelman_capacity += spots
             if room_type == 'SINGLE':
                 total_upperclass_singles += 1
